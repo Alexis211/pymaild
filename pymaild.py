@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-import socket, sys, os, threading, base64, hashlib, time
+import socket, sys, os, threading, base64, hashlib, time, sqlite3
+from datetime import datetime
 
 def loadConf(file):
 	c = {}
@@ -16,6 +17,57 @@ def loadConf(file):
 	return c
 
 conf = loadConf("/etc/pymaild.conf")
+
+def createDataBase():
+	db = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	db.execute("""CREATE TABLE users (
+	name VARCHAR (20) PRIMARY KEY,
+	password VARCHAR(51))""")
+	db.execute("""CREATE TABLE options (
+	id INTEGER PRIMARY KEY,
+	user VARCHAR (20),
+	name VARCHAR (40),
+	value VARCHAR(40))""")
+	db.execute("""CREATE TABLE lists (
+	id INTEGER PRIMARY KEY,
+	name VARCHAR (20))""")
+	db.execute("""CREATE TABLE mxservers (
+	id INTEGER PRIMARY KEY,
+	name VARCHAR (30),
+	ip VARCHAR(15),
+	domain VARCHAR(30),
+	priority INTEGER)""")
+	db.execute("""CREATE TABLE user_mail (
+	id INTEGER PRIMARY KEY,
+	user VARCHAR (20),
+	size INTEGER)""")
+	db.execute("""CREATE TABLE list_mail (
+	id INTEGER PRIMARY KEY,
+	list INTEGER,
+	mail_id VARCHAR (255),
+	subject VARCHAR (255),
+	reply_to INTEGER,
+	root_message INTEGER,
+	sender VARCHAR (100))""")
+	db.execute("""CREATE TABLE list_subscribers (
+	id INTEGER PRIMARY KEY,
+	list INTEGER,
+	email VARCHAR (100))""")
+	#create some indexes
+	db.execute("CREATE INDEX l_name ON lists (name)")
+	db.execute("CREATE INDEX lm_list ON list_mail (list)")
+	db.execute("CREATE INDEX lm_mail_id ON list_mail (mail_id)")
+	db.execute("CREATE INDEX lm_parent ON list_mail (reply_to)")
+	db.execute("CREATE INDEX ls_email ON list_subscribers (email)")
+	db.execute("CREATE INDEX m_domain ON mxservers (domain)")
+	db.execute("CREATE INDEX o_user ON options (user)")
+	db.execute("CREATE INDEX um_user ON user_mail (user)")
+	db.execute("CREATE INDEX user ON users (name, password)")
+	#let's insert some stuff
+	db.execute("INSERT INTO options(user, name, value) VALUES(?, ?, ?)", ("", "mailboxsize", "10000000",))
+	db.commit()
+	db.close()
+
 
 def log(level, message):
 	if level <= conf['loglevel']:
@@ -40,33 +92,30 @@ def sockReadLine(aconnection):
 	return line
 
 def authenticate(username, password):
-	fl = "%s:%s\n" % (username, password.lower())
-	with open(conf['maildir'] + "/users", "r") as userlist:
-		for line in userlist:
-			if line == fl:
-				userlist.close()
-				return 1
-	userlist.close()
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	if database.execute("SELECT * FROM users WHERE name=? AND password=?", (username, password,)).fetchone() != None:
+		database.close()
+		return 1
+	database.close()
 	return 0
 
 def userConf(username):
-	if not os.path.exists(conf['maildir'] + "/" + username + "/options"):
-		os.system("cp %s/default_options %s/%s/options" % (conf['maildir'], conf['maildir'], username))
-	return loadConf("%s/%s/options" % (conf['maildir'], username))
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	ret = {}
+	for line in database.execute("SELECT name, value FROM options WHERE user=?", (username,)):
+		ret[line[0]] = eval(line[1])
+	database.close()
+	return ret
 
 def getMailBoxInfo(username):
-	file = open(conf['maildir'] + "/" + username + "/mail", "r")
-	mail = file.readlines()
-	file.close()
-	s = 0
-	c = 0
-	for l in mail:
-		c += 1
-		s += int(l.split(':')[1])
-	return (s, c)
-
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	info = database.execute("SELECT COUNT(id), SUM(size) FROM user_mail WHERE user=?", (username,)).fetchone()
+	database.close()
+	return info
 
 def isValidAddress(emailaddr):
+	if " " in emailaddr or "/" in emailaddr or "&" in emailaddr:
+		return 0
 	a = emailaddr.split('@')
 	if len(a) != 2:
 		return 0
@@ -78,6 +127,8 @@ def isValidAddress(emailaddr):
 	return 1
 
 def reverseDNS(ipaddr):
+	if ' ' in ipaddr or '/' in ipaddr or '&' in ipaddr:
+		return "0.0.0.0"
 	if ipaddr == "127.0.0.1":
 		return "localhost"
 	a = os.popen("host " + ipaddr)
@@ -89,6 +140,8 @@ def reverseDNS(ipaddr):
 	return r
 
 def resolvDNS(hostname):
+	if ' ' in hostname or '/' in hostname or '&' in hostname:
+		return "0.0.0.0"
 	if hostname == "localhost":
 		return "127.0.0.1"
 	a = os.popen("host " + hostname)
@@ -100,20 +153,30 @@ def resolvDNS(hostname):
 	return r
 
 def mxServer(domain):
-	if domain in mxServers:
-		return mxServers[domain]
-	a = os.popen("dig %s MX" % (domain))
-	b = a.readlines()
-	a.close()
-	mxServers[domain] = []
-	for l in b:
-		if l != "\n" and l[0] != ';':
-			t = l.split('\t')[-1]
-			h = t.split(' ')[-1][:-2]
-			mxServers[domain].append((h, resolvDNS(h), int(t.split(' ')[-2])))
-	if len(mxServers[domain]) == 0:
-		mxServers[domain] = [(conf['smtprelay'], resolvDNS(conf['smtprelay']), 99)]
-	return mxServers[domain]
+	if ' ' in domain or '/' in domain or '&' in domain:
+		return []
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	ret = []
+	for srv in database.execute("SELECT name, ip, priority FROM mxservers WHERE domain=?", (domain,)):
+		ret.append(srv)
+	if len(ret) == 0:
+		a = os.popen("dig %s MX" % (domain))
+		b = a.readlines()
+		a.close()
+		for l in b:
+			if l != "\n" and l[0] != ';':
+				t = l.split('\t')[-1]
+				h = t.split(' ')[-1][:-2]
+				ret.append((h, resolvDNS(h), int(t.split(' ')[-2])))
+		if resolvDNS(domain) != "0.0.0.0":
+			ret.append((domain, resolvDNS(domain), 90))
+		if len(ret) == 0 and conf['smtprelay'] != "":
+			ret = [(conf['smtprelay'], resolvDNS(conf['smtprelay']), 99)]
+		for l in ret:
+			database.execute("INSERT INTO mxservers(name, ip, priority, domain) VALUES(?, ?, ?, ?)", (l[0], l[1], l[2], domain))
+		database.commit()
+	database.close()
+	return ret
 
 def getHead(filename):
 	file = open(filename, "r")
@@ -132,10 +195,32 @@ def getHead(filename):
 def queueMail(sender, recipients, contents, senderinfo):
 	mailid = hashlib.md5(sender + "#".join(recipients) + contents + str(time.time())).hexdigest().upper()
 	mailid = mailid[:13] + '.' + mailid[13:-13] + '.' + mailid[-13:]
+	contents = contents.split('\r\n')
+	headers = []
+	headersEnded = False
+	for line in contents:
+		if not headersEnded:
+			if line == "":
+				headersEnded = True
+			else:
+				headers.append(line.split(':')[0].lower())
 	file = open(conf['maildir'] + "/queued-" + mailid, "w")
+	if not "return-path" in headers:
+		file.write("Return-Path: <%s>\r\n" % (sender))
 	file.write("Received: from %s (%s [%s])\r\n" % senderinfo)
 	file.write("\tby %s (SMTP Server) with SMTP id %s\r\n" % (conf['serverhostname'], mailid))
-	file.write(contents)
+	while contents[0] != "":
+		file.write(contents[0] + "\r\n")
+		contents = contents[1:]
+	if not "message-id" in headers:
+		file.write("Message-Id: <%s@%s>\r\n" % (mailid, conf['serverhostname']))
+	if not "date" in headers:
+		file.write("Date: %s\r\n" % (datetime.now().strftime("%a,  %d %b %Y %H:%M:%S %z %Z")))
+	if not "from" in headers:
+		file.write("From: %s\r\n" % (sender))
+	if not "to" in headers:
+		file.write("To: undisclosed-recipients:;\r\n")
+	file.write("\r\n".join(contents))
 	file.close()
 	th = QueueProcessThread(mailid, sender, recipients)
 	th.start()
@@ -234,21 +319,90 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 	return 1
 
 def deliverLocalMail(sender, recipients, contents_file, mailid):
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
 	size = os.path.getsize(contents_file)
 	for r in recipients:
-		if os.path.isdir(conf['maildir'] + "/" + r):
-			uid = hashlib.md5(sender + mailid + r + str(time.time())).hexdigest()
+		if database.execute("SELECT name FROM users WHERE name=?", (r,)).fetchone() != None:
 			userconf = userConf(r)
 			if getMailBoxInfo(r)[0] + size > userconf['mailboxsize']:
 				sendErrorMail("mailbox full", (sender, r + "@" + conf['localdomain'], getHead(contents_file)))
 			else:
-				os.system("cp %s %s/%s/%s" % (contents_file, conf['maildir'], r, uid))
-				file = open(conf['maildir'] + "/" + r + "/mail", "a")
-				file.write("%s:%i\n" % (uid, size))
-				file.close()
+				uid = str(database.execute("INSERT INTO user_mail(user, size) VALUES(?, ?)", (r, size)).lastrowid)
+				os.system("cp %s %s/usermail/%s" % (contents_file, conf['maildir'], uid))
 		else:
 			if r != "daemon":
 				sendErrorMail("no such recipient", (sender, r + "@" + conf['localdomain'], getHead(contents_file)))
+	database.commit()
+	database.close()
+
+def listQueueMail(sender, recipients, contents_file, mailid):
+	database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+	contents = open(contents_file).read().split("\r\n")
+	headers = {}
+	while len(contents) > 1:
+		l = contents[0]
+		contents = contents[1:]
+		if l == "":
+			break
+		else:
+			if l[0] not in [' ', '\t']:
+				headers[l.split(':')[0].lower()] = ':'.join(l.split(':')[1:])[1:]
+	contents = "\r\n".join(contents)
+	for h in ['recieved', 'to', 'return-path']:
+		if h in headers: del headers[h]
+	for listname in recipients:
+		list = database.execute("SELECT id FROM lists WHERE name=?", (listname, )).fetchone()
+		if list == None:
+			sendErrorMail("no such recipeint", (sender, listname + "@lists." + conf['localdomain'], getHead(contents_file)))
+			continue
+		else:
+			listid = list[0]
+		r = [s[0] for s in database.execute("SELECT email FROM list_subscribers WHERE id=?", (listid, ))]
+		if not sender in r:
+			continue
+		listfile = "%s/queued-%s.%s" % (conf['maildir'], mailid, listname)
+		newhead = headers
+		if not "[%s]" % (listname) in headers['subject']:
+			headers['subject'] = "[%s] %s" % (listname, headers['subject'])
+		headers['to'] = "undisclosed-recipients:;"
+		headers['Return-Path'] = "<%s@lists.%s>" % (listname, conf['localdomain'])
+		headers['Reply-To'] = "<%s@lists.%s>" % (listname, conf['localdomain'])
+		file = open(listfile, "w")
+		for h in headers:
+			file.write("%s%s: %s\r\n" % (h[:1].upper(), h[1:], headers[h]))
+		file.write("\r\n")
+		file.write(contents)
+		file.close()
+		recipients = {}
+		for rcpt in r:
+			rc = rcpt.split("@")
+			if len(rc) == 2:
+				if rc[1] in recipients:
+					recipients[rc[1]].append(rc[0])
+				else:
+					recipients[rc[1]] = [rc[0]]
+		replyto = ""
+		if "references" in headers: replyto = headers['references']
+		if "in-reply-to" in headers: replyto = headers['in-reply-to']
+		if replyto == "":
+			replyto = 0
+			root_message = 0
+		else:
+			replyto = database.execute("SELECT id, root_message FROM list_mail WHERE mail_id=?", (replyto, )).fetchone()
+			if replyto == None:
+				replyto = 0
+				root_message = 0
+			else:
+				root_message = replyto[1]
+				replyto = replyto[0]
+		id = str(database.execute("INSERT INTO list_mail(list, mail_id, reply_to, sender, subject) VALUES(?, ?, ?, ?, ?)", (listid, headers['message-id'], replyto, sender, headers['subject'])).lastrowid)
+		if root_message == 0: root_message = id
+		database.execute("UPDATE list_mail SET root_message=? WHERE id=?", (root_message, id,))
+		os.system("cp %s %s/listmail/%s" % (listfile, conf['maildir'], id))
+		th = QueueProcessThread(mailid + "." + listname, listname + "@lists." + conf['localdomain'], recipients)
+		th.start()
+	database.commit()
+	database.close()
 
 class QueueProcessThread(threading.Thread):
 	def __init__(self, mailid, sender, recipients):
@@ -259,7 +413,7 @@ class QueueProcessThread(threading.Thread):
 	
 	def run(self):
 		log(2, "Queue processor: thread started for processing mail " + self.mailid)
-		time.sleep(5)
+		time.sleep(1)
 		msgid = self.mailid
 		sender = self.sender
 		recipients = self.recipients
@@ -269,6 +423,9 @@ class QueueProcessThread(threading.Thread):
 			if domain == conf['localdomain'] or domain == "localhost" or domain == "localdomain":
 				deliverLocalMail(sender, recipients[domain], file, msgid)
 				log(2, "Queue processor: local mail %s delivered to %s" % (msgid, ",".join(recipients[domain])))
+			elif domain == "lists." + conf['localdomain']:
+				listQueueMail(sender, recipients[domain], file, msgid)
+				log(2, "Queue processor: mail %s queued for mailing list." % (msgid))
 			else:
 				rcpts = []
 				for r in recipients[domain]:
@@ -352,9 +509,9 @@ class SmtpClientThread(threading.Thread):
 			else:
 				self.connection.send("502 Error: unknown command\r\n")
 
-		if (conf['requireauth'] == 0 and step == 1) or host in conf['noauthhosts'] or self.addr[0] in conf['noauthhosts']:
-			step = 2
-				
+		authed = False
+		if conf['requireauth'] == 0 or host in conf['noauthhosts'] or self.addr[0] in conf['noauthhosts']: authed = True
+
 		while step == 1 and not clientMsg == "":
 			clientMsg = sockReadLine(self.connection).lower()
 			if clientMsg == "":
@@ -369,8 +526,8 @@ class SmtpClientThread(threading.Thread):
 				username = l[1]
 				password = l[2]
 				if authenticate(username, hashlib.md5(password).hexdigest()) == 1:
-					step = 2
 					self.connection.send("235 plain authentication successfull\r\n")
+					authed = True
 				else:
 					self.connection.send("503 Error: authentication failed\r\n")
 			elif clientMsg == "auth login":
@@ -379,23 +536,10 @@ class SmtpClientThread(threading.Thread):
 				self.connection.send("334 %s\r\n" % (base64.b64encode("Password:")))
 				password = base64.b64decode(sockReadLine(self.connection))
 				if authenticate(username, hashlib.md5(password).hexdigest()) == 1:
-					step = 2
 					self.connection.send("235 plain authentication successfull\r\n")
+					authed = True
 				else:
 					self.connection.send("503 Error: authentication failed\r\n")
-			elif clientMsg[:4] in ["mail", "rcpt", "data"]:
-				self.connection.send("503 Error: must authenticate to send mail.\r\n")
-			else:
-				self.connection.send("502 Error: unknown command\r\n")
-
-		while step == 2 and not clientMsg == "":
-			clientMsg = sockReadLine(self.connection).lower()
-			if clientMsg == "":
-				break
-			elif clientMsg == "quit":
-				self.connection.send("221 closing connection\r\n")
-				clientMsg = ""
-				break
 			elif clientMsg[:10] == "mail from:":
 				if mailfrom == "":
 					clientMsg = clientMsg.split('<')
@@ -404,7 +548,7 @@ class SmtpClientThread(threading.Thread):
 					else:
 						clientMsg = clientMsg[1].split('>')[0]
 					if isValidAddress(clientMsg) == 0:
-						self.onnection.send("504 <%s>: Sender address rejected: need fully-qualified address\r\n" % (clientMsg))
+						self.connection.send("504 <%s>: Sender address rejected: need fully-qualified address\r\n" % (clientMsg))
 					else:
 						mailfrom = clientMsg
 						self.connection.send("250 Ok\r\n")
@@ -423,11 +567,14 @@ class SmtpClientThread(threading.Thread):
 						self.connection.send("504 <%s>: Recipient address rejected: need fully-qualified address\r\n" % (clientMsg))
 					else:
 						s = clientMsg.split('@')
-						if s[1] in recipients:
-							recipients[s[1]].append(s[0])
+						if s[1] == conf['localdomain'] or s[1] == "lists." + conf['localdomain'] or authed == True:
+							if s[1] in recipients:
+								recipients[s[1]].append(s[0])
+							else:
+								recipients[s[1]] = [s[0]]
+							self.connection.send("250 Ok\r\n")
 						else:
-							recipients[s[1]] = [s[0]]
-						self.connection.send("250 Ok\r\n")
+							self.connection.send("504 <%s>: Recipient address rejected: need to be authenticated to send mail to another domain.\r\n" % (clientMsg))
 			elif clientMsg == "data":
 				if mailfrom == "":
 					self.connection.send("503 Error: need MAIL command\r\n")
@@ -456,8 +603,12 @@ class SmtpClientThread(threading.Thread):
 								break
 					if not clientMsg == "":
 						if len(data) > conf['smtpmaxmailsize']:
-							self.connection.send("523 Error: message to big (size limit is %i)\r\n" % (conf['smtpmaxmailsize']))
-							log(2, "SMTP server: %s sent too big mail, mail refused." % (self.addr[0]))
+							self.connection.send(
+								"523 Error: message to big (size limit is %i)\r\n" % 
+								(conf['smtpmaxmailsize']))
+							log(2, 
+								"SMTP server: %s sent too big mail, mail refused." % 
+								(self.addr[0]))
 						else:
 							mailid = queueMail(mailfrom, recipients, data, (username, host, self.addr[0]))
 							self.connection.send("250 OK, queued as %s\r\n" % (mailid))
@@ -499,13 +650,15 @@ class Pop3ClientThread(threading.Thread):
 		self.addr = addr
 
 	def run(self):
+		database = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
 		clientMsg = "."
 		name = self.getName()
 		step = 0
 		username = ""
 		
 		while step == 0 and clientMsg != "":
-			clientMsg = sockReadLine(self.connection).lower()
+			l = sockReadLine(self.connection)
+			clientMsg = l.lower()
 			log(3, clientMsg)
 			if clientMsg == "":
 				break
@@ -525,7 +678,7 @@ class Pop3ClientThread(threading.Thread):
 				if username == "":
 					self.connection.send("-ERR invalid command\r\n")
 				else:
-					password = hashlib.md5(clientMsg[5:]).hexdigest()
+					password = hashlib.md5(l[5:]).hexdigest()
 					if authenticate(username, password) == 1:
 						step = 1
 						self.connection.send("+OK\r\n")
@@ -539,14 +692,11 @@ class Pop3ClientThread(threading.Thread):
 				log(3, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
 				self.connection.send("-ERR invalid command\r\n")
 
-		maildir = conf['maildir'] + "/" + username + "/"
 		if step == 1:
-			file = open(maildir + "mail", "r")
 			mail = []
-			for a in file.readlines():
-				i = a[:-1].split(':')
-				mail.append([i[0], int(i[1]), 0])
-			file.close()
+			for msg in database.execute("SELECT id, size FROM user_mail WHERE user=?", (username, )):
+				mail.append([str(msg[0]), msg[1], 0])
+			maildir = conf['maildir'] + "/usermail/"
 
 		while step == 1 and clientMsg != "":
 			clientMsg = sockReadLine(self.connection).lower()
@@ -649,18 +799,20 @@ class Pop3ClientThread(threading.Thread):
 				log(3, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
 				self.connection.send("-ERR invalid command\r\n")
 				
-
 		log(2, "POP3 server: end transaction with " + self.addr[0])
 		self.connection.close()
 		if step == 1:
-			file = open(maildir + "mail", "w")
 			for m in mail:
-				if m[2] == 0:
-					file.write(m[0] + "\n")
-				else:
+				if m[2] != 0:
 					os.remove(maildir + m[0])
-			file.close()
+					database.execute("DELETE FROM user_mail WHERE id=?", (int(m[0]),))
+		database.commit()
+		database.close()
 		del pop3clients[name]
+
+if not os.path.exists(conf['maildir'] + "/pymaild.sqlite"):
+	createDataBase()
+db = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
 
 action = ""
 
@@ -681,17 +833,20 @@ if action == 'stop':
 		print "PyMaild is not running."
 		sys.exit(1)
 elif action == 'updatemx':
-	if os.path.exists(conf['maildir'] + "/mxservers"):
-		mxlist = open(conf['maildir'] + "/mxservers", "r")
-		mxoldlist = eval(mxlist.read())
-		mxlist.close()
-		mxServers = {}
-		for a in mxoldlist:
-			print "Updating MX server list for " + a
-			b = mxServer(a)
-		mxlist = open(conf['maildir'] + "/mxservers", "w")
-		mxlist.write(repr(mxServers).replace('), ', '),\n  ').replace('], ', '],\n ').replace(':', ':\n') + "\n")
-		mxlist.close()
+	if len(sys.argv) > 2:
+		for i in range(2, len(sys.argv)):
+			s = sys.argv[i]
+			db.execute("DELETE FROM mxservers WHERE domain=?", (i, ))
+			db.commit()
+			print "Updating MX server list for %s..." % (s)
+			b = mxServer(s)
+	else:
+		mxs = [s[0] for s in db.execute("SELECT domain FROM mxservers GROUP BY domain")]
+		db.execute("DELETE FROM mxservers WHERE 1")
+		db.commit()
+		for s in mxs:
+			print "Updating MX server list for %s..." % (s)
+			b = mxServer(s)
 elif action == "adduser":
 	if len(sys.argv) > 2:
 		username = sys.argv[2]
@@ -699,50 +854,38 @@ elif action == "adduser":
 		username = raw_input("Username : ")
 	if username == "":
 		print "Invalid username."
-		sys.exit()
+		sys.exit(1)
 	username = username.lower()
-	ulist = open(conf['maildir'] + "/users", "r")
-	for a in ulist.readlines():
-		if a.split(':')[0] == username:
-			print "User already exists."
-			sys.exit()
-	ulist.close()
+	if db.execute("SELECT name FROM users WHERE name=?", (username, )).fetchone() != None:
+		print "User already exists."
+		sys.exit()
 	if len(sys.argv) > 3:
 		password = sys.argv[3]
 	else:
 		password = raw_input("Password : ")
 	if password == "":
 		print "Invalid password."
-		sys.exit()
-	ulist = open(conf['maildir'] + "/users", "a")
-	ulist.write(username + ":" + hashlib.md5(password).hexdigest() + "\n")
-	ulist.close()
-	os.mkdir(conf['maildir'] + "/" + username)
-	os.system("touch %s/%s/mail" % (conf['maildir'], username))
+		sys.exit(1)
+	password =  hashlib.md5(password).hexdigest()
+	db.execute("INSERT INTO users(name, password) VALUES(?, ?)", (username, password,))
+	for opt in db.execute("SELECT name, value FROM options WHERE user = ?", ("",)):
+		db.execute("INSERT INTO options(user, name, value) VALUES(?, ?, ?)", (username, opt[0], opt[1],))
 	print "User added."
 elif action == "rmuser":
 	if len(sys.argv) > 2:
 		username = sys.argv[2]
 	else:
 		print "You must specify username."
-		sys.exit()
+		sys.exit(1)
 	username = username.lower()
-	ulist = open(conf['maildir'] + "/users", "r")
-	list = ulist.readlines()
-	ulist.close()
-	ulist = open(conf['maildir'] + "/users", "w")
-	ok = 0
-	for u in list:
-		if u.split(':')[0] == username:
-			print "User deleted."
-			ok = 1
-		else:
-			ulist.write(u)
-	ulist.close()
-	if ok == 0:
-		print "No such user."
-	else:
-		os.system("rm -rf %s/%s" % (conf['maildir'], username))
+	if db.execute("SELECT name FROM users WHERE name=?", (username, )).fetchone() == None:
+		print "User does not exist."
+		sys.exit(1)
+	db.execute("DELETE FROM users WHERE name=?", (username, ))
+	for mail in db.execute("SELECT id FROM user_mail WHERE user=?", (username, )):
+		os.remove(conf['maildir'] + "/user_mail/%i" % (mail[0]))
+		db.execute("DELETE FROM user_mail WHERE ID = ?", mail)
+	print "User removed."
 elif action == "chpasswd":
 	if len(sys.argv) > 2:
 		username = sys.argv[2]
@@ -750,34 +893,28 @@ elif action == "chpasswd":
 		print "You must specify username."
 		sys.exit()
 	username = username.lower()
-	ulist = open(conf['maildir'] + "/users", "r")
-	list = ulist.readlines()
-	ulist.close()
+	if db.execute("SELECT name FROM users WHERE name=?", (username, )).fetchone() == None:
+		print "User does not exist."
+		sys.exit(1)
 	if len(sys.argv) > 3:
 		password = sys.argv[3]
 	else:
 		password = raw_input("New password : ")
 	if password == "":
 		print "Invalid password."
-		sys.exit()
-	ulist = open(conf['maildir'] + "/users", "w")
-	ok = 0
-	for u in list:
-		if u.split(':')[0] == username:
-			ulist.write("%s:%s\n" % (username, hashlib.md5(password).hexdigest()))
-			ok = 1
-			print "Password changed."
-		else:
-			ulist.write(u)
-	ulist.close()
-	if ok == 0:
-		print "No such user."
+		sys.exit(1)
+	password =  hashlib.md5(password).hexdigest()
+	db.execute("UPDATE users SET password=? WHERE name=?", (password, username,))
+	print "Password changed."
 elif action == 'getinfo':
 	if len(sys.argv) > 2:
 		username = sys.argv[2]
 	else:
 		print "You must specify username."
-		sys.exit()
+		sys.exit(1)
+	if db.execute("SELECT * FROM users WHERE name=?", (username, )).fetchone() == None:
+		print "Error : no such user"
+		sys.exit(1)
 	mbinfo = getMailBoxInfo(username)
 	userconf = userConf(username)
 	print "usedmailbox=%i" % (mbinfo[0])
@@ -792,36 +929,149 @@ elif action == 'chopt' or action == 'chdefaultopt':
 			username = sys.argv[2]
 			option = sys.argv[3]
 			value = sys.argv[4]
-			filename = conf['maildir'] + "/" + username + "/options"
 		else:
 			print "Usage :	pymaild.py chopt <username> <option> <new value>"
-			sys.exit()
+			sys.exit(1)
 	else:
 		if len(sys.argv) > 3:
+			username = ""
 			option = sys.argv[2]
 			value = sys.argv[3]
-			filename = conf['maildir'] + "/default_options"
 		else:
 			print "Usage :	pymaild.py chdefaultopt <option> <new value>"
-			sys.exit()
-	nc = ""
-	f = open(filename, "r")
-	for l in f.readlines():
-		if l[0] != "#" and len(l) > 3:
-			s = l.split("=")
-			name = s[0]
-			while name[-1] == " " or name[-1] == '\t':
-				name = name[:-1]
-			if name == option:
-				nc += option + " = " + value + "\n"
-			else:
-				nc += l
+			sys.exit(1)
+	if db.execute("SELECT * FROM users WHERE name=?", (username, )).fetchone() == None:
+		print "Error : no such user"
+		sys.exit(1)
+	e = db.execute("SELECT id FROM options WHERE user=? AND name=?", (username, option,)).fetchone()
+	if e == None:
+		db.execute("INSERT INTO options(user, name, value) VALUES(?, ?, ?)", (username, option, value))
+	else:
+		db.execute("UPDATE options SET value=? WHERE id=?", (value, e[0]))
+elif action == 'addlist':
+	if len(sys.argv) > 2:
+		list = sys.argv[2]
+	else:
+		print "Usage :	pymaild.py addlist <list>"
+		sys.exit(1)
+	elist = db.execute("SELECT id FROM lists WHERE name = ?", (list,)).fetchone()
+	if elist == None:
+		db.execute("INSERT INTO lists(name) VALUES(?)", (list,))
+		print "Ok"
+	else:
+		print "Error : lists already exists."
+		sys.exit(1)
+elif action == 'rmlist':
+	if len(sys.argv) > 2:
+		list = sys.argv[2]
+	else:
+		print "Usage :	pymaild.py rmlist <list>"
+		sys.exit(1)
+	list = db.execute("SELECT id FROM lists WHERE name = ?", (list,)).fetchone()
+	if list == None:
+		print "Error : list does not exist."
+		sys.exit(1)
+	listid = list[0]
+	db.execute("DELETE FROM list_subscribers WHERE list=?", (listid,))
+	for mail in db.execute("SELECT id FROM list_mail WHERE list=?", (listid,)):
+		os.remove(conf['maildir'] + "/listmail/%i" % (mail[0]))
+	db.execute("DELETE FROM list_mail WHERE list=?", (listid,))
+	db.execute("DELETE FROM lists WHERE id=?", (listid,))
+	print "Ok"
+elif action == 'mlsubscribe':
+	if len(sys.argv) > 3:
+		list = sys.argv[2]
+		email = sys.argv[3]
+	else:
+		print "Usage:	pymaild.py mlsubscribe <list> <email>"
+		sys.exit(1)
+	list = db.execute("SELECT id FROM lists WHERE name = ?", (list,)).fetchone()
+	if list == None:
+		print "Error : no such mailing list."
+		sys.exit(1)
+	else:
+		if db.execute("SELECT id FROM list_subscribers WHERE list=? AND email=?", (list[0], email,)).fetchone() == None:
+			db.execute("INSERT INTO list_subscribers(list, email) VALUES (?, ?)", (list[0], email,))
+			print "Ok."
 		else:
-			nc += l
-	f.close()
-	f = open(filename, "w")
-	f.write(nc)
-	f.close()
+			print "Error : user already subscribed to list."
+			sys.exit(1)
+elif action == 'mlunsubscribe':
+	if len(sys.argv) > 3:
+		list = sys.argv[2]
+		email = sys.argv[3]
+	else:
+		print "Usage:	pymaild.py mlunsubscribe <list> <email>"
+		sys.exit(1)
+	list = db.execute("SELECT id FROM lists WHERE name = ?", (list,)).fetchone()
+	if list == None:
+		print "Error : no such mailing list."
+		sys.exit(1)
+	else:
+		subscription = db.execute("SELECT id FROM list_subscribers WHERE list=? AND email=?", (list[0], email,)).fetchone()
+		if subscription == None:
+			print "Error : user not subscribed to list."
+			sys.exit(1)
+		else:
+			db.execute("DELETE FROM list_subscribers WHERE id=?", (subscription[0], ))
+			print "Ok."
+elif action == 'sendmail':
+	args = sys.argv[2:]
+	recipients = []
+	opt_t = False
+	opt_i = False
+	while len(args) > 0:
+		arg = args[0]
+		args = args[1:]
+		if arg[0] == "-":
+			if arg == "-t": arg_t = True
+			if arg == "-i": arg_i = True
+		else:
+			recipients.append(arg)
+	headers = []
+	f = False
+	contents = ""
+	while 1:
+		try:
+			l = raw_input()
+		except:
+			break
+		if not f:
+			if l == "": f = True
+			else: headers.append(l)
+		else:
+			if l == ".":
+				if opt_i: l == ".."
+				else: break
+			contents += l + "\r\n"
+	if opt_t:
+		nhs = []
+		for h in headers:
+			if h.lower()[:3] in ['to:', 'cc:']:
+				for r in h[3:].split(','): recipients.append(r)
+				nhs.append(h)
+			elif h.lower()[:4] == "bcc:":
+				for r in h[:4].split(','): recipients.append(r)
+			else:
+				newh.append(h)
+		headers = nhs
+	rcpts = {}
+	for r in recipients:
+		while r[0] == ' ': r = r[1:]
+		while r[-1] == ' ': r = r[:-1]
+		r = r.split('@')
+		if len(r) == 2:
+			if r[1] in rcpts:
+				rcpts[r[1]].append(r[0])
+			else:
+				rcpts[r[1]] = [r[0]]
+	c = ""
+	for h in headers:
+		c += h + "\r\n"
+	c += "\r\n"
+	c += contents
+	if os.fork() == 0:
+		queueMail(conf['sendmailfrom'], rcpts, c, ('localhost', 'localhost', '127.0.0.1'))
 elif action == 'start':
 	if os.path.exists(conf['pidfile']):
 		print "PyMaild is already running. Run 'pymaild.py stop' to stop it."
@@ -843,13 +1093,7 @@ elif action == 'start':
 			print "Error while starting PyMaild. Check %s for more information." % (conf['logfile'])
 			sys.exit(1)
 	else:
-		log(0, " *********  PyMaild 0.2 starting... **********")
-		if os.path.exists(conf['maildir'] + "/mxservers"):
-			mxlist = open(conf['maildir'] + "/mxservers", "r")
-			mxServers = eval(mxlist.read())
-			mxlist.close
-		else:
-			mxServers = {}
+		log(0, " *********  PyMaild 0.3 starting... **********")
 
 		smtpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		try:
@@ -886,15 +1130,19 @@ elif action == 'start':
 
 		smtpserv.running = 0
 		pop3serv.running = 0
-
-		mxlist = open(conf['maildir'] + "/mxservers", "w")
-		mxlist.write(repr(mxServers).replace('), ', '),\n  ').replace('], ', '],\n ').replace(':', ':\n') + "\n")
-		mxlist.close()
 else:
 	print "Usage: pymaild.py start|stop"
 	print "\tpymaild.py adduser [<username> [<password>]]"
 	print "\tpymaild.py rmuser <username>"
 	print "\tpymaild.py chpasswd <username> [<new password>]"
 	print "\tpymaild.py getinfo <username>"
-	print "\tpymaild.py (chopt <username> <option> <new value>"
+	print "\tpymaild.py chopt <username> <option> <new value>"
+	print "\tpymaild.py addlist <listname>"
+	print "\tpymaild.py rmlist <listname>"
+	print "\tpymaild.py mlsubscribe <list> <email>"
+	print "\tpymaild.py mlunsubscribe <list> <email>"
+	print "\tpymaild.py sendmail <options>"
 	print "\tpymaild.py updatemx"
+
+db.commit()
+db.close()

@@ -1,4 +1,4 @@
-PyMaild 0.2 ReadMe
+PyMaild 0.3 ReadMe
 
 DISCLAIMER : PyMaild is in early alpha stage, use it at your own risk !
 
@@ -23,7 +23,7 @@ pymaild.py stop
 All these commands must be run as a user that has write permission to maildir, pidfile and logfile (see pymaild.conf).
 
 -- Managing user mailboxes :
-No mailbox is needed for PyMaild to work correctly, the default user (root, with password = root) can be deleted.
+No mailbox is needed for PyMaild to work correctly, by default none exists.
 pymaild.py adduser [<usename> [<password>]]
 pymaild.py rmuser <user to remove>
 pymaild.py chpasswd <username> [<new password>]
@@ -38,9 +38,21 @@ PyMaild keeps a cache of MX servers associated with each domain name (list is in
 You may want to regenerate this list. To do so, first stop PyMaild, then run :
 pymaild.py updatemx
 
--- Information about PyMaild :
-[maildir]/users is the list of all mailboxes.
-[maildir]/default_options is the default options for a new mailbox
-[maildir]/queued-* is the contents of a queued mail, waiting for being sent.
-[maildir]/[username]/mail is the list of mail files waiting in a mailbox.
-[maildir]/[username]/options is the file containing options for the mailbox
+-- Managing maililng lists :
+pyMaild has included support for mailing lists. Lists addresses are of this form : <list name>@lists.<domain name>.
+pymaild.py addlist <listname>
+pymaild.py rmlist <listname>
+pymaild.py mlsubscribe <list> <email>
+pymaild.py mlunsubscribe <list> <email>
+
+-- Using pyMaild as sendmail :
+pymaild.py sendmail <options> [<recipients>]
+Available options are : 
+-t : parse message headers for recipients (headers To:, Cc: and Bcc:. Bcc: headers will be removed.)
+-i : ignore dots alone on lines by themselves in incoming message. Wait for a EOF character.
+You do not need to have the pymaild daemon started to use this functionnality.
+
+-- Information about pyMaild :
+[maildir]/pymaild.sqlite is the database for all of pymaild's stuff.
+[maildir]/usermail : contains all mail waiting for users
+[maildir]/listmail : contains all mail of mailing lists
