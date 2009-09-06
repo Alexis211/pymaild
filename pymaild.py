@@ -810,6 +810,13 @@ class Pop3ClientThread(threading.Thread):
 		database.close()
 		del pop3clients[name]
 
+if not os.path.exists(conf['maildir']):
+	os.system("mkdir " + conf['maildir']);
+if not os.path.exists(conf['maildir'] + "/usermail"):
+	os.system("mkdir " + conf['maildir'] + "/usermail");
+if not os.path.exists(conf['maildir'] + "/listmail"):
+	os.system("mkdir " + conf['maildir'] + "/listmail");
+
 if not os.path.exists(conf['maildir'] + "/pymaild.sqlite"):
 	createDataBase()
 db = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
@@ -826,7 +833,7 @@ if action == 'stop':
 		pidfile.close()
 		os.remove(conf['pidfile'])
 		print "Waiting for PyMaild to stop..."
-		time.sleep(10)
+		time.sleep(2)
 		os.kill(pid, 15)
 		sys.exit(0)
 	else:
