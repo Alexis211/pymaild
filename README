@@ -5,7 +5,7 @@ DISCLAIMER : PyMaild is in early alpha stage, use it at your own risk !
 -- Installation :
 Copy pymaild.conf to /etc. This file MUST be in /etc. If it is not, you will have to edit pymaild.py.
 Copy pymaild.py to /usr/bin (or /usr/local/bin if you prefer). If it is not executable, chmod +x it.
-Copy the mail/ directory somewhere, for example to /var/pymaild
+Copy the mail/ directory somewhere, for example to /var/pymaild (optionnal, it will be created otherwise)
 
 -- Configuration :
 Edit pymaild.conf, change whatever you need to be changed.
