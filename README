@@ -1,0 +1,28 @@
+PyMaild 0.1 ReadMe
+
+-- Installation :
+Just copy all these files (whith the mail/ directory) anywhere (I recommend you create a directory /opt/pymaild)
+
+-- Configuration :
+Edit pymaild.conf, change whatever you need to be changed.
+You should change :
+- smtprelay : put your ISP's smtp server here
+- serverhostname : for a basic installation, just put in 'localhost'
+- localdomain : change this to your domain name
+- datapath : change this if you have not installed pymaild to /opt/pymaild
+
+-- Starting/stopping PyMaild :
+Assuming you have installed it to /opt/pymaild :
+python /opt/pymaild/pymaild.py start
+python /opt/pymaild/pymaild.py stop
+
+-- Managing user mailboxes :
+No mailbox is needed for PyMaild to work correctly, the default user (root, with password = root) can be deleted.
+python /opt/pymaild/pymaild.py adduser [--username=<usename> --password=<password>]
+python /opt/pymaild/pymaild.py rmuser --username=<user to remove>
+Changing password is not supported yet
+
+-- Updating MX record cache :
+PyMaild keeps a cache of MX servers associated with each domain name (list is in mail/mxservers).
+You may want to regenerate this list. To do so, first stop PyMaild, then run :
+python /opt/pymaild/pymaild.py updatemx
