@@ -1,26 +1,25 @@
 #!/usr/bin/env python
 import socket, sys, os, threading, base64, hashlib, time
-import cfgfile
 
-conf = cfgfile.cfgset()
-conf.load("pymaild.conf",
-		{"serverhost": ("What hosts to listen for", "127.0.0.1"),
-			"smtpserverport": ("What port for the SMTP server", 25),
-			"pop3serverport": ("What port for the POP3 server", 110),
-			"serverhostname": ("Server's host name", "smtp.example.com"),
-			"localdomain": ("Domain for which mail has to be kept", 'example.com'),
-			"requireauth": ("Is authentication required for using the SMTP service ?", 1),
-			"noauthhosts": ("Hosts which do not require authentication for using the SMTP service.", ['localhost']),
-			"smtpmaxmailsize": ("Maximum mail size, in bytes", 10000000),
-			"datapath": ("The path where mail and account list is stored", "/opt/pymaild/mail"),
-			"usesmtprelay": ("Use a SMTP relay server for mail ?", 0),
-			"smtprelay": ("Relay for mail. Will be used if usesmtprelay = 1 or if mail can't be delivered normally.", ""),
-			"loglevel": ("Log level : 0 = no log, 1 = errors, 2 = more stuff, 3 = debug", 2),
-			})
+def loadConf(file):
+	c = {}
+	f = open(file, "r")
+	for l in f.readlines():
+		if l[0] != "#" and len(l) > 3:
+			s = l.split("=")
+			name = s[0]
+			while name[-1] == " " or name[-1] == '\t':
+				name = name[:-1]
+			val = eval("=".join(s[1:]))
+			c[name] = val
+	f.close()
+	return c
+
+conf = loadConf("/etc/pymaild.conf")
 
 def log(level, message):
-	if level <= conf.loglevel:
-		logfile = open(conf.datapath + "/log", "a")
+	if level <= conf['loglevel']:
+		logfile = open(conf['logfile'], "a")
 		l = ['System', 'Error', 'Information', 'Debug'][level]
 		logfile.write('%i %s : %s\n' % (int(time.time()), l, message))
 		logfile.close()
@@ -42,13 +41,30 @@ def sockReadLine(aconnection):
 
 def authenticate(username, password):
 	fl = "%s:%s\n" % (username, password.lower())
-	with open(conf.datapath + "/users", "r") as userlist:
+	with open(conf['maildir'] + "/users", "r") as userlist:
 		for line in userlist:
 			if line == fl:
 				userlist.close()
 				return 1
 	userlist.close()
 	return 0
+
+def userConf(username):
+	if not os.path.exists(conf['maildir'] + "/" + username + "/options"):
+		os.system("cp %s/default_options %s/%s/options" % (conf['maildir'], conf['maildir'], username))
+	return loadConf("%s/%s/options" % (conf['maildir'], username))
+
+def getMailBoxInfo(username):
+	file = open(conf['maildir'] + "/" + username + "/mail", "r")
+	mail = file.readlines()
+	file.close()
+	s = 0
+	c = 0
+	for l in mail:
+		c += 1
+		s += int(l.split(':')[1])
+	return (s, c)
+
 
 def isValidAddress(emailaddr):
 	a = emailaddr.split('@')
@@ -96,7 +112,7 @@ def mxServer(domain):
 			h = t.split(' ')[-1][:-2]
 			mxServers[domain].append((h, resolvDNS(h), int(t.split(' ')[-2])))
 	if len(mxServers[domain]) == 0:
-		mxServers[domain] = [(conf.smtprelay, resolvDNS(conf.smtprelay), 99)]
+		mxServers[domain] = [(conf['smtprelay'], resolvDNS(conf['smtprelay']), 99)]
 	return mxServers[domain]
 
 def getHead(filename):
@@ -116,9 +132,9 @@ def getHead(filename):
 def queueMail(sender, recipients, contents, senderinfo):
 	mailid = hashlib.md5(sender + "#".join(recipients) + contents + str(time.time())).hexdigest().upper()
 	mailid = mailid[:13] + '.' + mailid[13:-13] + '.' + mailid[-13:]
-	file = open(conf.datapath + "/queued-" + mailid, "w")
+	file = open(conf['maildir'] + "/queued-" + mailid, "w")
 	file.write("Received: from %s (%s [%s])\r\n" % senderinfo)
-	file.write("\tby %s (SMTP Server) with SMTP id %s\r\n" % (conf.serverhostname, mailid))
+	file.write("\tby %s (SMTP Server) with SMTP id %s\r\n" % (conf['serverhostname'], mailid))
 	file.write(contents)
 	file.close()
 	th = QueueProcessThread(mailid, sender, recipients)
@@ -143,6 +159,14 @@ def sendErrorMail(error, data):
 			if l[:8] == "Subject:":
 				message += l
 				break
+	elif error == "mailbox full":
+		subject = "Recipient's mailbox is full"
+		recipients = [data[0]]
+		message = "Hello\r\n\r\nSorry, mailbox for %s is full, your mail could not be delivered.\r\n" % (data[1])
+		for l in data[2].split('\n'):
+			if l[:8] == "Subject:":
+				message += l
+				break
 	else:
 		return
 	r = {}
@@ -152,9 +176,9 @@ def sendErrorMail(error, data):
 			r[s[1]].append(s[0])
 		else:
 			r[s[1]] = [s[0]]
-	queueMail("daemon@" + conf.localdomain, r,
+	queueMail("daemon@" + conf['localdomain'], r,
 			"From: Mail Delivery Daemon <no-reply@%s>\r\nSubject: %s\r\n\r\n%s" 
-			% (conf.localdomain, subject, message),
+			% (conf['localdomain'], subject, message),
 			('Mail Daemon', 'localhost', '127.0.0.1'))
 
 
@@ -167,8 +191,8 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 	if sockReadLine(csock)[:4] != "220 ":
 		csock.close()
 		return 0
-	csock.send("ehlo %s\r\n" % (conf.serverhostname))
-	log(3, "ehlo %s" % (conf.serverhostname))
+	csock.send("ehlo %s\r\n" % (conf['serverhostname']))
+	log(3, "ehlo %s" % (conf['serverhostname']))
 	l = "...."
 	while l[3] != ' ':
 		l = sockReadLine(csock)
@@ -210,16 +234,21 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 	return 1
 
 def deliverLocalMail(sender, recipients, contents_file, mailid):
+	size = os.path.getsize(contents_file)
 	for r in recipients:
-		if os.path.isdir(conf.datapath + "/" + r):
+		if os.path.isdir(conf['maildir'] + "/" + r):
 			uid = hashlib.md5(sender + mailid + r + str(time.time())).hexdigest()
-			file = open(conf.datapath + "/" + r + "/mail", "a")
-			file.write(uid + "\n")
-			file.close()
-			os.system("cp %s %s/%s/%s" % (contents_file, conf.datapath, r, uid))
+			userconf = userConf(r)
+			if getMailBoxInfo(r)[0] + size > userconf['mailboxsize']:
+				sendErrorMail("mailbox full", (sender, r + "@" + conf['localdomain'], getHead(contents_file)))
+			else:
+				os.system("cp %s %s/%s/%s" % (contents_file, conf['maildir'], r, uid))
+				file = open(conf['maildir'] + "/" + r + "/mail", "a")
+				file.write("%s:%i\n" % (uid, size))
+				file.close()
 		else:
 			if r != "daemon":
-				sendErrorMail("no such recipient", (sender, r + "@" + conf.localdomain, getHead(contents_file)))
+				sendErrorMail("no such recipient", (sender, r + "@" + conf['localdomain'], getHead(contents_file)))
 
 class QueueProcessThread(threading.Thread):
 	def __init__(self, mailid, sender, recipients):
@@ -235,9 +264,9 @@ class QueueProcessThread(threading.Thread):
 		sender = self.sender
 		recipients = self.recipients
 		log(2, "Queue processor: processing %s : %s => %s" % (msgid, sender, repr(recipients)))
-		file = conf.datapath + "/queued-" + msgid
+		file = conf['maildir'] + "/queued-" + msgid
 		for domain in recipients:
-			if domain == conf.localdomain or domain == "localhost" or domain == "localdomain":
+			if domain == conf['localdomain'] or domain == "localhost" or domain == "localdomain":
 				deliverLocalMail(sender, recipients[domain], file, msgid)
 				log(2, "Queue processor: local mail %s delivered to %s" % (msgid, ",".join(recipients[domain])))
 			else:
@@ -245,7 +274,7 @@ class QueueProcessThread(threading.Thread):
 				for r in recipients[domain]:
 					rcpts.append(r + '@' + domain)
 				ok = 0
-				if conf.usesmtprelay == 0:
+				if conf['usesmtprelay'] == 0:
 					mxs = mxServer(domain)
 					for i in range(0, 100):
 						if ok == 0:
@@ -255,12 +284,13 @@ class QueueProcessThread(threading.Thread):
 										log(2, "Queue processor: mail %s sent to %s for %s." % (msgid, mx[0], ",".join(rcpts)))
 										ok = 1
 										break
+				if ok == 0 and conf['smtprelay'] != "":
+					if smtpSendMail(conf['smtprelay'], sender, rcpts, file) != 0:
+						log(2, "Queue processor: mail %s relayed to %s for %s." % (msgid, conf['smtprelay'], ",".join(rcpts)))
+						ok = 1
 				if ok == 0:
-					if smtpSendMail(conf.smtprelay, sender, rcpts, file) == 0:
-						sendErrorMail("cannot deliver", (sender, rcpts, getHead(file)))
-						log(1, "Queue processor: mail %s : deliver failed for %s." % (msgid, ",".join(rcpts)))
-					else:
-						log(2, "Queue processor: mail %s relayed to %s for %s." % (msgid, conf.smtprelay, ",".join(rcpts)))
+					sendErrorMail("cannot deliver", (sender, rcpts, getHead(file)))
+					log(1, "Queue processor: mail %s : deliver failed for %s." % (msgid, ",".join(rcpts)))
 		os.remove(file)
 
 class SmtpServerThread(threading.Thread):
@@ -279,7 +309,7 @@ class SmtpServerThread(threading.Thread):
 			name = th.getName()
 			smtpclients[name] = connection
 			log(2, "SMTP server: entering connection from %s" % (address[0]))
-			connection.send("220 %s SMTP pymaild\n" % (conf.serverhostname))
+			connection.send("220 %s SMTP pymaild\n" % (conf['serverhostname']))
 		smtpsock.close()
 		smtpsock.shutdown()
 		log(2, "SMTP server: listening thread stopped")
@@ -308,10 +338,10 @@ class SmtpClientThread(threading.Thread):
 				break
 			elif clientMsg[:5] in ["ehlo ", "helo "]:
 				step = 1
-				self.connection.send("250-%s\r\n" % (conf.serverhostname))
+				self.connection.send("250-%s\r\n" % (conf['serverhostname']))
 				self.connection.send("250-PIPELINING\r\n")
-				self.connection.send("250-SIZE %i\r\n" % (conf.smtpmaxmailsize))
-				if conf.requireauth != 0:
+				self.connection.send("250-SIZE %i\r\n" % (conf['smtpmaxmailsize']))
+				if conf['requireauth'] != 0:
 					self.connection.send("250-AUTH PLAIN LOGIN\r\n")
 				self.connection.send("250-8BITMIME\r\n")
 				self.connection.send("250 XFILTERED\r\n")
@@ -322,7 +352,7 @@ class SmtpClientThread(threading.Thread):
 			else:
 				self.connection.send("502 Error: unknown command\r\n")
 
-		if (conf.requireauth == 0 and step == 1) or host in conf.noauthhosts or self.addr[0] in conf.noauthhosts:
+		if (conf['requireauth'] == 0 and step == 1) or host in conf['noauthhosts'] or self.addr[0] in conf['noauthhosts']:
 			step = 2
 				
 		while step == 1 and not clientMsg == "":
@@ -414,7 +444,7 @@ class SmtpClientThread(threading.Thread):
 							clientMsg = ""
 							break
 						else:
-							if len(data) > conf.smtpmaxmailsize:
+							if len(data) > conf['smtpmaxmailsize']:
 								f = f + a
 								if len(f) > 10:
 									f = f[1:]
@@ -425,8 +455,8 @@ class SmtpClientThread(threading.Thread):
 							if len(data) > 10 and data[-5:] == "\r\n.\r\n":
 								break
 					if not clientMsg == "":
-						if len(data) > conf.smtpmaxmailsize:
-							self.connection.send("523 Error: message to big (size limit is %i)\r\n" % (conf.smtpmaxmailsize))
+						if len(data) > conf['smtpmaxmailsize']:
+							self.connection.send("523 Error: message to big (size limit is %i)\r\n" % (conf['smtpmaxmailsize']))
 							log(2, "SMTP server: %s sent too big mail, mail refused." % (self.addr[0]))
 						else:
 							mailid = queueMail(mailfrom, recipients, data, (username, host, self.addr[0]))
@@ -509,12 +539,13 @@ class Pop3ClientThread(threading.Thread):
 				log(3, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
 				self.connection.send("-ERR invalid command\r\n")
 
-		maildir = conf.datapath + "/" + username + "/"
+		maildir = conf['maildir'] + "/" + username + "/"
 		if step == 1:
 			file = open(maildir + "mail", "r")
 			mail = []
 			for a in file.readlines():
-				mail.append([a[:-1], os.path.getsize(maildir + a[:-1]), 0])
+				i = a[:-1].split(':')
+				mail.append([i[0], int(i[1]), 0])
 			file.close()
 
 		while step == 1 and clientMsg != "":
@@ -554,7 +585,7 @@ class Pop3ClientThread(threading.Thread):
 				id = int(clientMsg.split(' ')[1]) - 1
 				if mail[id][2] == 0:
 					mail[id][2] = 1
-					self.connection.send("+OK message %i deleted\r\n" % (id))
+					self.connection.send("+OK message %i deleted\r\n" % (id + 1))
 				else:
 					self.connection.send("-ERR Message deleted\r\n")
 			elif clientMsg == "uidl":
@@ -633,23 +664,15 @@ class Pop3ClientThread(threading.Thread):
 
 action = ""
 
-username = ""
-password = ""
-
-for a in sys.argv:
-	if a in ['start', 'stop', 'adduser', 'rmuser', 'updatemx']:
-		action = a
-	if a[:11] == "--username=":
-		username = a[11:]
-	if a[:11] == "--password=":
-		password = a[11:]
+if len(sys.argv) > 1:
+	action = sys.argv[1]
 
 if action == 'stop':
-	if os.path.exists(conf.datapath + "/pid"):
-		pidfile = open(conf.datapath + "/pid")
+	if os.path.exists(conf['pidfile']):
+		pidfile = open(conf['pidfile'])
 		pid = int(pidfile.read())
 		pidfile.close()
-		os.remove(conf.datapath + "/pid")
+		os.remove(conf['pidfile'])
 		print "Waiting for PyMaild to stop..."
 		time.sleep(10)
 		os.kill(pid, 15)
@@ -658,50 +681,56 @@ if action == 'stop':
 		print "PyMaild is not running."
 		sys.exit(1)
 elif action == 'updatemx':
-	if os.path.exists(conf.datapath + "/mxservers"):
-		mxlist = open(conf.datapath + "/mxservers", "r")
+	if os.path.exists(conf['maildir'] + "/mxservers"):
+		mxlist = open(conf['maildir'] + "/mxservers", "r")
 		mxoldlist = eval(mxlist.read())
 		mxlist.close()
 		mxServers = {}
 		for a in mxoldlist:
 			print "Updating MX server list for " + a
 			b = mxServer(a)
-		mxlist = open(conf.datapath + "/mxservers", "w")
+		mxlist = open(conf['maildir'] + "/mxservers", "w")
 		mxlist.write(repr(mxServers).replace('), ', '),\n  ').replace('], ', '],\n ').replace(':', ':\n') + "\n")
 		mxlist.close()
 elif action == "adduser":
-	if username == "":
+	if len(sys.argv) > 2:
+		username = sys.argv[2]
+	else:
 		username = raw_input("Username : ")
 	if username == "":
 		print "Invalid username."
 		sys.exit()
 	username = username.lower()
-	ulist = open(conf.datapath + "/users", "r")
+	ulist = open(conf['maildir'] + "/users", "r")
 	for a in ulist.readlines():
 		if a.split(':')[0] == username:
 			print "User already exists."
 			sys.exit()
 	ulist.close()
-	if password == "":
+	if len(sys.argv) > 3:
+		password = sys.argv[3]
+	else:
 		password = raw_input("Password : ")
 	if password == "":
 		print "Invalid password."
 		sys.exit()
-	ulist = open(conf.datapath + "/users", "a")
+	ulist = open(conf['maildir'] + "/users", "a")
 	ulist.write(username + ":" + hashlib.md5(password).hexdigest() + "\n")
 	ulist.close()
-	os.mkdir(conf.datapath + "/" + username)
-	os.system("touch %s/%s/mail" % (conf.datapath, username))
+	os.mkdir(conf['maildir'] + "/" + username)
+	os.system("touch %s/%s/mail" % (conf['maildir'], username))
 	print "User added."
 elif action == "rmuser":
-	if username == "":
+	if len(sys.argv) > 2:
+		username = sys.argv[2]
+	else:
 		print "You must specify username."
 		sys.exit()
 	username = username.lower()
-	ulist = open(conf.datapath + "/users", "r")
+	ulist = open(conf['maildir'] + "/users", "r")
 	list = ulist.readlines()
 	ulist.close()
-	ulist = open(conf.datapath + "/users", "w")
+	ulist = open(conf['maildir'] + "/users", "w")
 	ok = 0
 	for u in list:
 		if u.split(':')[0] == username:
@@ -713,16 +742,95 @@ elif action == "rmuser":
 	if ok == 0:
 		print "No such user."
 	else:
-		os.system("rm -rf %s/%s" % (conf.datapath, username))
+		os.system("rm -rf %s/%s" % (conf['maildir'], username))
+elif action == "chpasswd":
+	if len(sys.argv) > 2:
+		username = sys.argv[2]
+	else:
+		print "You must specify username."
+		sys.exit()
+	username = username.lower()
+	ulist = open(conf['maildir'] + "/users", "r")
+	list = ulist.readlines()
+	ulist.close()
+	if len(sys.argv) > 3:
+		password = sys.argv[3]
+	else:
+		password = raw_input("New password : ")
+	if password == "":
+		print "Invalid password."
+		sys.exit()
+	ulist = open(conf['maildir'] + "/users", "w")
+	ok = 0
+	for u in list:
+		if u.split(':')[0] == username:
+			ulist.write("%s:%s\n" % (username, hashlib.md5(password).hexdigest()))
+			ok = 1
+			print "Password changed."
+		else:
+			ulist.write(u)
+	ulist.close()
+	if ok == 0:
+		print "No such user."
+elif action == 'getinfo':
+	if len(sys.argv) > 2:
+		username = sys.argv[2]
+	else:
+		print "You must specify username."
+		sys.exit()
+	mbinfo = getMailBoxInfo(username)
+	userconf = userConf(username)
+	print "usedmailbox=%i" % (mbinfo[0])
+	print "waitingmails=%i" % (mbinfo[1])
+	print "pop3server=%s:%i" % (conf['serverhostname'], conf['pop3serverport'])
+	print "smtpserver=%s:%i" % (conf['serverhostname'], conf['smtpserverport'])
+	for n in userconf:
+		print n + "=" + repr(userconf[n])
+elif action == 'chopt' or action == 'chdefaultopt':
+	if action == 'chopt':
+		if len(sys.argv) > 4:
+			username = sys.argv[2]
+			option = sys.argv[3]
+			value = sys.argv[4]
+			filename = conf['maildir'] + "/" + username + "/options"
+		else:
+			print "Usage :	pymaild.py chopt <username> <option> <new value>"
+			sys.exit()
+	else:
+		if len(sys.argv) > 3:
+			option = sys.argv[2]
+			value = sys.argv[3]
+			filename = conf['maildir'] + "/default_options"
+		else:
+			print "Usage :	pymaild.py chdefaultopt <option> <new value>"
+			sys.exit()
+	nc = ""
+	f = open(filename, "r")
+	for l in f.readlines():
+		if l[0] != "#" and len(l) > 3:
+			s = l.split("=")
+			name = s[0]
+			while name[-1] == " " or name[-1] == '\t':
+				name = name[:-1]
+			if name == option:
+				nc += option + " = " + value + "\n"
+			else:
+				nc += l
+		else:
+			nc += l
+	f.close()
+	f = open(filename, "w")
+	f.write(nc)
+	f.close()
 elif action == 'start':
-	if os.path.exists(conf.datapath + "/pid"):
+	if os.path.exists(conf['pidfile']):
 		print "PyMaild is already running. Run 'pymaild.py stop' to stop it."
 		sys.exit(1)
 	pid = os.fork()
 	if pid != 0:
 		time.sleep(1)
-		if os.path.exists(conf.datapath + "/pid"):
-			f = open(conf.datapath + "/pid")
+		if os.path.exists(conf['pidfile']):
+			f = open(conf['pidfile'])
 			pid2 = int(f.read())
 			f.close()
 			if (pid == pid2):
@@ -732,12 +840,12 @@ elif action == 'start':
 				print "FATAL UNKNOWN ERROR."
 				sys.exit(1)
 		else:
-			print "Error while starting PyMaild. Check %s/log for more information." % (conf.datapath)
+			print "Error while starting PyMaild. Check %s for more information." % (conf['logfile'])
 			sys.exit(1)
 	else:
-		log(0, " *********  PyMaild 0.1 starting... **********")
-		if os.path.exists(conf.datapath + "/mxservers"):
-			mxlist = open(conf.datapath + "/mxservers", "r")
+		log(0, " *********  PyMaild 0.2 starting... **********")
+		if os.path.exists(conf['maildir'] + "/mxservers"):
+			mxlist = open(conf['maildir'] + "/mxservers", "r")
 			mxServers = eval(mxlist.read())
 			mxlist.close
 		else:
@@ -745,11 +853,11 @@ elif action == 'start':
 
 		smtpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		try:
-			smtpsock.bind((conf.serverhost, conf.smtpserverport))
+			smtpsock.bind((conf['serverhost'], conf['smtpserverport']))
 		except socket.error:
-			log(1, "Error while binding SMTP server socket on port %i." % (conf.smtpserverport))
+			log(1, "Error while binding SMTP server socket on port %i." % (conf['smtpserverport']))
 			sys.exit()
-		log(2, "SMTP server: ready, listening on port %i." % (conf.smtpserverport))
+		log(2, "SMTP server: ready, listening on port %i." % (conf['smtpserverport']))
 		smtpsock.listen(5)
 		smtpclients = {}
 		smtpserv = SmtpServerThread()
@@ -758,32 +866,35 @@ elif action == 'start':
 
 		pop3sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		try:
-			pop3sock.bind((conf.serverhost, conf.pop3serverport))
+			pop3sock.bind((conf['serverhost'], conf['pop3serverport']))
 		except socket.error:
-			log(1, "Error while binding POP3 server socket on port %i." % (conf.pop3serverport))
+			log(1, "Error while binding POP3 server socket on port %i." % (conf['pop3serverport']))
 			sys.exit()
-		log(2, "POP3 server: ready, listening on port %i." % (conf.pop3serverport))
+		log(2, "POP3 server: ready, listening on port %i." % (conf['pop3serverport']))
 		pop3sock.listen(5)
 		pop3clients = {}
 		pop3serv = Pop3ServerThread()
 		pop3serv.running = 1
 		pop3serv.start()
 
-		pidfile = open(conf.datapath + "/pid", "w")
+		pidfile = open(conf['pidfile'], "w")
 		pidfile.write("%i" % (os.getpid()))
 		pidfile.close()
 
-		while os.path.exists(conf.datapath + "/pid"):
+		while os.path.exists(conf['pidfile']):
 			time.sleep(1)
 
 		smtpserv.running = 0
 		pop3serv.running = 0
 
-		mxlist = open(conf.datapath + "/mxservers", "w")
+		mxlist = open(conf['maildir'] + "/mxservers", "w")
 		mxlist.write(repr(mxServers).replace('), ', '),\n  ').replace('], ', '],\n ').replace(':', ':\n') + "\n")
 		mxlist.close()
 else:
 	print "Usage: pymaild.py start|stop"
-	print "\tpymaild.py adduser [--username=<username>] [--password=<password>]"
-	print "\tpymaild.py rmuser --username=<username>"
+	print "\tpymaild.py adduser [<username> [<password>]]"
+	print "\tpymaild.py rmuser <username>"
+	print "\tpymaild.py chpasswd <username> [<new password>]"
+	print "\tpymaild.py getinfo <username>"
+	print "\tpymaild.py (chopt <username> <option> <new value>"
 	print "\tpymaild.py updatemx"

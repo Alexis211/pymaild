@@ -1,0 +1,2 @@
+# Mailbox maximum contents size (in octets) #
+mailboxsize = 10000000

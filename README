@@ -1,28 +1,46 @@
-PyMaild 0.1 ReadMe
+PyMaild 0.2 ReadMe
+
+DISCLAIMER : PyMaild is in early alpha stage, use it at your own risk !
 
 -- Installation :
-Just copy all these files (whith the mail/ directory) anywhere (I recommend you create a directory /opt/pymaild)
+Copy pymaild.conf to /etc. This file MUST be in /etc. If it is not, you will have to edit pymaild.py.
+Copy pymaild.py to /usr/bin (or /usr/local/bin if you prefer). If it is not executable, chmod +x it.
+Copy the mail/ directory somewhere, for example to /var/pymaild
 
 -- Configuration :
 Edit pymaild.conf, change whatever you need to be changed.
 You should change :
-- smtprelay : put your ISP's smtp server here
+- smtprelay : if using PyMaild to relay mail, enter your SMTP relay server here
 - serverhostname : for a basic installation, just put in 'localhost'
 - localdomain : change this to your domain name
-- datapath : change this if you have not installed pymaild to /opt/pymaild
+- maildir : change this if you have not copied the mail/ directory to /var/pymaild
+- serverhost : change this to 0.0.0.0 to allow all IP addresses to connect
 
 -- Starting/stopping PyMaild :
-Assuming you have installed it to /opt/pymaild :
-python /opt/pymaild/pymaild.py start
-python /opt/pymaild/pymaild.py stop
+Assuming you have installed it to /usr/bin :
+pymaild.py start
+pymaild.py stop
+All these commands must be run as a user that has write permission to maildir, pidfile and logfile (see pymaild.conf).
 
 -- Managing user mailboxes :
 No mailbox is needed for PyMaild to work correctly, the default user (root, with password = root) can be deleted.
-python /opt/pymaild/pymaild.py adduser [--username=<usename> --password=<password>]
-python /opt/pymaild/pymaild.py rmuser --username=<user to remove>
-Changing password is not supported yet
+pymaild.py adduser [<usename> [<password>]]
+pymaild.py rmuser <user to remove>
+pymaild.py chpasswd <username> [<new password>]
+All mailboxes have some options (for example the maximum size for mailbox contents).
+Modify an option : pymaild.py chopt <username> <option> <newvalue>
+Modify an option in default conf (used for all new mailboxes) : pymaild.py chdefaultopt <option> <newvalue>
+Show mailbox information : pymaild.py getinfo <username> (this also returns information about waiting mail count and size, and server configuration)
+All these functions are to be used for example in a web administration interface. (PHP : use shell_exec() to get output of a command)
 
 -- Updating MX record cache :
 PyMaild keeps a cache of MX servers associated with each domain name (list is in mail/mxservers).
 You may want to regenerate this list. To do so, first stop PyMaild, then run :
-python /opt/pymaild/pymaild.py updatemx
+pymaild.py updatemx
+
+-- Information about PyMaild :
+[maildir]/users is the list of all mailboxes.
+[maildir]/default_options is the default options for a new mailbox
+[maildir]/queued-* is the contents of a queued mail, waiting for being sent.
+[maildir]/[username]/mail is the list of mail files waiting in a mailbox.
+[maildir]/[username]/options is the file containing options for the mailbox
