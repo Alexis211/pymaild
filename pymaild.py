@@ -16,7 +16,7 @@ def loadConf(file):
 	f.close()
 	return c
 
-conf = loadConf("/etc/pymaild.conf")
+conf = loadConf("/home/mail/pymaild.conf")
 
 def createDataBase():
 	db = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
@@ -466,7 +466,7 @@ class SmtpServerThread(threading.Thread):
 			name = th.getName()
 			smtpclients[name] = connection
 			log(2, "SMTP server: entering connection from %s" % (address[0]))
-			connection.send("220 %s SMTP pymaild\n" % (conf['serverhostname']))
+			connection.send("220 %s SMTP pymaild\r\n" % (conf['serverhostname']))
 		smtpsock.close()
 		smtpsock.shutdown()
 		log(2, "SMTP server: listening thread stopped")
