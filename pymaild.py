@@ -543,6 +543,7 @@ class SmtpClientThread(threading.Thread):
 			elif clientMsg == "rset":
 				mailfrom = ""
 				recipients = {}
+				self.connection.send("250 reset ok\r\n")
 			elif clientMsg[:5] == "vrfy ":
 				who = clientMsg[5:]
 				dbase = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
