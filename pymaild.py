@@ -626,7 +626,9 @@ class SmtpClientThread(threading.Thread):
 							log(2, "SMTP server: %s sent mail, queued as %s" % (self.addr[0], mailid))
 						mailfrom = ""
 						recipients = {}
-			elif clientMsg != "noop":
+			elif clientMsg == "noop":
+				self.connection.send("250 ok no problem ;)\r\n");
+			else:
 				self.connection.send("502 Error: unknown command\r\n")
 
 		log(2, "SMTP server: end transaction with " + self.addr[0])
