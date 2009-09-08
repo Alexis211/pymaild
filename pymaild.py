@@ -540,6 +540,17 @@ class SmtpClientThread(threading.Thread):
 					authed = True
 				else:
 					self.connection.send("503 Error: authentication failed\r\n")
+			elif clientMsg == "rset":
+				mailfrom = ""
+				recipients = {}
+			elif clientMsg[:5] == "vrfy ":
+				who = clientMsg[5:]
+				dbase = sqlite3.connect(conf['maildir'] + "/pymaild.sqlite")
+				if dbase.execute("SELECT * FROM users WHERE name=?", (who, )).fetchone() != None:
+					self.connection.send("250 %s@%s\r\n" % (who, conf['localdomain'])) 
+				else:
+					self.connection.send("252 can't tell :/\r\n");
+				dbase.close()
 			elif clientMsg[:10] == "mail from:":
 				if mailfrom == "":
 					clientMsg = clientMsg.split('<')
@@ -615,6 +626,8 @@ class SmtpClientThread(threading.Thread):
 							log(2, "SMTP server: %s sent mail, queued as %s" % (self.addr[0], mailid))
 						mailfrom = ""
 						recipients = {}
+			elif clientMsg == "noop":
+				self.connection.send("250 ok no problem ;)\r\n");
 			else:
 				self.connection.send("502 Error: unknown command\r\n")
 
