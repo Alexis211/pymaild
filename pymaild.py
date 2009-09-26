@@ -596,22 +596,17 @@ class SmtpClientThread(threading.Thread):
 					self.connection.send("354 End data with <CRLF>.<CRLF>\r\n")
 					data = ""
 					f = ""
+					file = self.connection.makefile("rb")
 					while 1:
-						a = self.connection.recv(1)
-						if a == "":
+						a = self.connection.readline()
+						if not a:
 							self.connection.close()
 							clientMsg = ""
 							break
 						else:
-							if len(data) > conf['smtpmaxmailsize']:
-								f = f + a
-								if len(f) > 10:
-									f = f[1:]
-								if f[-5:] == "\r\n.\r\n":
-									break
-							else:
+							if len(data) < conf['smtpmaxmailsize']:
 								data += a
-							if len(data) > 10 and data[-5:] == "\r\n.\r\n":
+							if a == ".\r\n":
 								break
 					if not clientMsg == "":
 						if len(data) > conf['smtpmaxmailsize']:
