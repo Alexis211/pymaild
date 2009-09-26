@@ -606,7 +606,7 @@ class SmtpClientThread(threading.Thread):
 						else:
 							if len(data) < conf['smtpmaxmailsize']:
 								data += a
-							if a == ".\r\n":
+							if a[0] == "." and (len(a) == 1 or a[1] in ["\r", "\n"]):
 								break
 					if not clientMsg == "":
 						if len(data) > conf['smtpmaxmailsize']:
