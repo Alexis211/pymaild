@@ -598,7 +598,7 @@ class SmtpClientThread(threading.Thread):
 					f = ""
 					file = self.connection.makefile("rb")
 					while 1:
-						a = self.file.readline()
+						a = file.readline()
 						if not a:
 							self.connection.close()
 							clientMsg = ""
