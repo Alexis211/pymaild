@@ -909,7 +909,7 @@ elif action == "rmuser":
 		sys.exit(1)
 	db.execute("DELETE FROM users WHERE name=?", (username, ))
 	for mail in db.execute("SELECT id FROM user_mail WHERE user=?", (username, )):
-		os.remove(conf['maildir'] + "/user_mail/%i" % (mail[0]))
+		os.remove(conf['maildir'] + "/usermail/%i" % (mail[0]))
 		db.execute("DELETE FROM user_mail WHERE ID = ?", mail)
 	print "User removed."
 elif action == "chpasswd":
