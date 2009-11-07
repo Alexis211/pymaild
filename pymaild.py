@@ -1081,23 +1081,16 @@ elif action == 'sendmail':
 			else:
 				newh.append(h)
 		headers = nhs
-	rcpts = {}
-	for r in recipients:
-		while r[0] == ' ': r = r[1:]
-		while r[-1] == ' ': r = r[:-1]
-		r = r.split('@')
-		if len(r) == 2:
-			if r[1] in rcpts:
-				rcpts[r[1]].append(r[0])
-			else:
-				rcpts[r[1]] = [r[0]]
 	c = ""
 	for h in headers:
 		c += h + "\r\n"
 	c += "\r\n"
 	c += contents
-	if os.fork() == 0:
-		queueMail(conf['sendmailfrom'], rcpts, c, ('localhost', 'localhost', '127.0.0.1'))
+	if c[-5:] != "\r\n.\r\n": c += "\r\n.\r\n"
+	filename = "/tmp/mail." + str(time.time())
+	open(filename, "w").write(c)
+	smtpSendMail('localhost', conf['sendmailfrom'], recipients, filename)
+	os.remove(filename)
 elif action == 'start':
 	if os.path.exists(conf['pidfile']):
 		print "PyMaild is already running. Run 'pymaild.py stop' to stop it."
