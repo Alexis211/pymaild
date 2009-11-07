@@ -358,7 +358,7 @@ def listQueueMail(sender, recipients, contents_file, mailid):
 			continue
 		else:
 			listid = list[0]
-		r = [s[0] for s in database.execute("SELECT email FROM list_subscribers WHERE id=?", (listid, ))]
+		r = [s[0] for s in database.execute("SELECT email FROM list_subscribers WHERE list=?", (listid, ))]
 		if not sender in r:
 			continue
 		listfile = "%s/queued-%s.%s" % (conf['maildir'], mailid, listname)
