@@ -79,14 +79,15 @@ def log(level, message):
 def sockReadLine(aconnection):
 	line = ""
 	while 1:
-		a = aconnection.recv(1)
-		if a == "\n":
-			break
-		elif a == "":
+		try :
+			a = aconnection.recv(1)
+			if a == "\n":
+				break
+			else:
+				line += a
+		except:
 			aconnection.close()
 			return ""
-		else:
-			line += a
 	while line[-1:] == "\r" or line[-1:] == "\n":
 		line = line[:-1]
 	return line
@@ -461,12 +462,15 @@ class SmtpServerThread(threading.Thread):
 			if self.running == 0:
 				connection.close()
 				break
-			th = SmtpClientThread(connection, address)
-			th.start()
-			name = th.getName()
-			smtpclients[name] = connection
-			log(2, "SMTP server: entering connection from %s" % (address[0]))
-			connection.send("220 %s SMTP pymaild\r\n" % (conf['serverhostname']))
+			try:
+				connection.send("220 %s SMTP pymaild\r\n" % (conf['serverhostname']))
+				th = SmtpClientThread(connection, address)
+				th.start()
+				name = th.getName()
+				smtpclients[name] = connection
+				log(2, "SMTP server: entering connection from %s" % (address[0]))
+			except:
+				connection.close()
 		smtpsock.close()
 		smtpsock.shutdown()
 		log(2, "SMTP server: listening thread stopped")
@@ -642,12 +646,15 @@ class Pop3ServerThread(threading.Thread):
 			if self.running == 0:
 				connection.close()
 				break
-			th = Pop3ClientThread(connection, address)
-			th.start()
-			name = th.getName()
-			pop3clients[name] = connection
-			log(2, "POP3 server: entering connection from %s" % (address[0]))
-			connection.send("+OK POP3 ready\n")
+			try:
+				connection.send("+OK POP3 ready\n")
+				th = Pop3ClientThread(connection, address)
+				th.start()
+				name = th.getName()
+				pop3clients[name] = connection
+				log(2, "POP3 server: entering connection from %s" % (address[0]))
+			except:
+				connection.close()
 		pop3sock.close()
 		pop3sock.shutdown()
 		log(2, "POP3 server: listening thread stopped")
@@ -843,7 +850,10 @@ if action == 'stop':
 		os.remove(conf['pidfile'])
 		print "Waiting for PyMaild to stop..."
 		time.sleep(2)
-		os.kill(pid, 15)
+		try:
+			os.kill(pid, 15)
+		except:
+			pass
 		sys.exit(0)
 	else:
 		print "PyMaild is not running."
@@ -1143,6 +1153,9 @@ elif action == 'start':
 
 		while os.path.exists(conf['pidfile']):
 			time.sleep(1)
+
+		smtpsock.close()
+		pop3sock.close()
 
 		smtpserv.running = 0
 		pop3serv.running = 0
