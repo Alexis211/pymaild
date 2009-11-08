@@ -56,3 +56,14 @@ You do not need to have the pymaild daemon started to use this functionnality.
 [maildir]/pymaild.sqlite is the database for all of pymaild's stuff.
 [maildir]/usermail : contains all mail waiting for users
 [maildir]/listmail : contains all mail of mailing lists
+
+-- Loglevels :
+
+0. System
+1. Critical
+2. Error
+4. Warning
+5. Notice
+7. Activity
+8. Unintresting activity
+9. Debug

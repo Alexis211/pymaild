@@ -72,7 +72,7 @@ def createDataBase():
 def log(level, message):
 	if level <= conf['loglevel']:
 		logfile = open(conf['logfile'], "a")
-		l = ['System', 'Error', 'Information', 'Debug'][level]
+		l = ['System', 'Critical', 'Error', '', 'Warning', 'Notice', '', 'Activity', 'Activity', 'Debug'][level]
 		logfile.write('%i %s : %s\n' % (int(time.time()), l, message))
 		logfile.close()
 
@@ -278,7 +278,7 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 		csock.close()
 		return 0
 	csock.send("ehlo %s\r\n" % (conf['serverhostname']))
-	log(3, "ehlo %s" % (conf['serverhostname']))
+	log(9, "ehlo %s" % (conf['serverhostname']))
 	l = "...."
 	while l[3] != ' ':
 		l = sockReadLine(csock)
@@ -286,18 +286,18 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 		csock.close()
 		return 0
 	csock.send("mail from: <%s>\r\n" % (sender))
-	log(3, "mail from: <%s>" % (sender))
+	log(9, "mail from: <%s>" % (sender))
 	if sockReadLine(csock)[:4] != "250 ":
 		csock.close()
 		return 0
 	for r in recipients:
 		csock.send("rcpt to: <%s>\r\n" % (r))
-		log(3, "rcpt to: <%s>" % (r))
+		log(9, "rcpt to: <%s>" % (r))
 		if sockReadLine(csock)[:4] != "250 ":
 			csock.close()
 			return 0
 	csock.send("data\r\n")
-	log(3, "data")
+	log(9, "data")
 	if sockReadLine(csock)[:4] != "354 ":
 		csock.close()
 		return 0
@@ -315,7 +315,7 @@ def smtpSendMail(smtp_server, sender, recipients, contents_file):
 		csock.close()
 		return 0
 	csock.send("quit\r\n")
-	log(3, "quit")
+	log(9, "quit")
 	csock.close()
 	return 1
 
@@ -413,20 +413,20 @@ class QueueProcessThread(threading.Thread):
 		self.recipients = recipients
 	
 	def run(self):
-		log(2, "Queue processor: thread started for processing mail " + self.mailid)
+		log(8, "Queue processor: thread started for processing mail " + self.mailid)
 		time.sleep(1)
 		msgid = self.mailid
 		sender = self.sender
 		recipients = self.recipients
-		log(2, "Queue processor: processing %s : %s => %s" % (msgid, sender, repr(recipients)))
+		log(7, "Queue processor: processing %s : %s => %s" % (msgid, sender, repr(recipients)))
 		file = conf['maildir'] + "/queued-" + msgid
 		for domain in recipients:
 			if domain == conf['localdomain'] or domain == "localhost" or domain == "localdomain":
 				deliverLocalMail(sender, recipients[domain], file, msgid)
-				log(2, "Queue processor: local mail %s delivered to %s" % (msgid, ",".join(recipients[domain])))
+				log(7, "Queue processor: local mail %s delivered to %s" % (msgid, ",".join(recipients[domain])))
 			elif domain == "lists." + conf['localdomain']:
 				listQueueMail(sender, recipients[domain], file, msgid)
-				log(2, "Queue processor: mail %s queued for mailing list." % (msgid))
+				log(7, "Queue processor: mail %s queued for mailing list." % (msgid))
 			else:
 				rcpts = []
 				for r in recipients[domain]:
@@ -439,16 +439,16 @@ class QueueProcessThread(threading.Thread):
 							for mx in mxs:
 								if mx[2] == i:
 									if smtpSendMail(mx[0], sender, rcpts, file) == 1:
-										log(2, "Queue processor: mail %s sent to %s for %s." % (msgid, mx[0], ",".join(rcpts)))
+										log(7, "Queue processor: mail %s sent to %s for %s." % (msgid, mx[0], ",".join(rcpts)))
 										ok = 1
 										break
 				if ok == 0 and conf['smtprelay'] != "":
 					if smtpSendMail(conf['smtprelay'], sender, rcpts, file) != 0:
-						log(2, "Queue processor: mail %s relayed to %s for %s." % (msgid, conf['smtprelay'], ",".join(rcpts)))
+						log(7, "Queue processor: mail %s relayed to %s for %s." % (msgid, conf['smtprelay'], ",".join(rcpts)))
 						ok = 1
 				if ok == 0:
 					sendErrorMail("cannot deliver", (sender, rcpts, getHead(file)))
-					log(1, "Queue processor: mail %s : deliver failed for %s." % (msgid, ",".join(rcpts)))
+					log(5, "Queue processor: mail %s : deliver failed for %s." % (msgid, ",".join(rcpts)))
 		os.remove(file)
 
 class SmtpServerThread(threading.Thread):
@@ -456,7 +456,7 @@ class SmtpServerThread(threading.Thread):
 		threading.Thread.__init__(self)
 	
 	def run(self):
-		log(2, "SMTP server: listening thread started")
+		log(8, "SMTP server: listening thread started")
 		while self.running == 1:
 			connection, address = smtpsock.accept()
 			if self.running == 0:
@@ -468,12 +468,12 @@ class SmtpServerThread(threading.Thread):
 				th.start()
 				name = th.getName()
 				smtpclients[name] = connection
-				log(2, "SMTP server: entering connection from %s" % (address[0]))
+				log(8, "SMTP server: entering connection from %s" % (address[0]))
 			except:
 				connection.close()
 		smtpsock.close()
 		smtpsock.shutdown()
-		log(2, "SMTP server: listening thread stopped")
+		log(8, "SMTP server: listening thread stopped")
 
 class SmtpClientThread(threading.Thread):
 	def __init__(self, conn, addr):
@@ -507,7 +507,7 @@ class SmtpClientThread(threading.Thread):
 				self.connection.send("250-8BITMIME\r\n")
 				self.connection.send("250 XFILTERED\r\n")
 				username = clientMsg.split(" ")[1]
-				log(2, "SMTP server: %s (%s) ehloed as %s" % (self.addr[0], host, username))
+				log(7, "SMTP server: %s (%s) ehloed as %s" % (self.addr[0], host, username))
 			elif clientMsg[:4] in ["auth", "mail", "rcpt", "data"]:
 				self.connection.send("503 Error: polite people say hello\r\n")
 			else:
@@ -617,13 +617,13 @@ class SmtpClientThread(threading.Thread):
 							self.connection.send(
 								"523 Error: message to big (size limit is %i)\r\n" % 
 								(conf['smtpmaxmailsize']))
-							log(2, 
+							log(5, 
 								"SMTP server: %s sent too big mail, mail refused." % 
 								(self.addr[0]))
 						else:
 							mailid = queueMail(mailfrom, recipients, data, (username, host, self.addr[0]))
 							self.connection.send("250 OK, queued as %s\r\n" % (mailid))
-							log(2, "SMTP server: %s sent mail, queued as %s" % (self.addr[0], mailid))
+							log(7, "SMTP server: %s sent mail, queued as %s" % (self.addr[0], mailid))
 						mailfrom = ""
 						recipients = {}
 			elif clientMsg == "noop":
@@ -631,7 +631,7 @@ class SmtpClientThread(threading.Thread):
 			else:
 				self.connection.send("502 Error: unknown command\r\n")
 
-		log(2, "SMTP server: end transaction with " + self.addr[0])
+		log(8, "SMTP server: end transaction with " + self.addr[0])
 		self.connection.close()
 		del smtpclients[name]
 
@@ -640,7 +640,7 @@ class Pop3ServerThread(threading.Thread):
 		threading.Thread.__init__(self)
 	
 	def run(self):
-		log(2, "POP3 server: listening thread started")
+		log(8, "POP3 server: listening thread started")
 		while self.running == 1:
 			connection, address = pop3sock.accept()
 			if self.running == 0:
@@ -652,12 +652,12 @@ class Pop3ServerThread(threading.Thread):
 				th.start()
 				name = th.getName()
 				pop3clients[name] = connection
-				log(2, "POP3 server: entering connection from %s" % (address[0]))
+				log(8, "POP3 server: entering connection from %s" % (address[0]))
 			except:
 				connection.close()
 		pop3sock.close()
 		pop3sock.shutdown()
-		log(2, "POP3 server: listening thread stopped")
+		log(8, "POP3 server: listening thread stopped")
 
 class Pop3ClientThread(threading.Thread):
 	def __init__(self, conn, addr):
@@ -675,7 +675,7 @@ class Pop3ClientThread(threading.Thread):
 		while step == 0 and clientMsg != "":
 			l = sockReadLine(self.connection)
 			clientMsg = l.lower()
-			log(3, clientMsg)
+			log(9, clientMsg)
 			if clientMsg == "":
 				break
 			elif clientMsg == "quit":
@@ -698,14 +698,14 @@ class Pop3ClientThread(threading.Thread):
 					if authenticate(username, password) == 1:
 						step = 1
 						self.connection.send("+OK\r\n")
-						log(2, "POP3 server: %s authed as %s" % (self.addr[0], username))
+						log(8, "POP3 server: %s authed as %s" % (self.addr[0], username))
 					else:
 						clientMsg = ""
 						self.connection.send("-ERR authentication failed\r\n")
-						log(2, "POP3 server: %s failed to auth as %s" % (self.addr[0], username))
+						log(5, "POP3 server: %s failed to auth as %s" % (self.addr[0], username))
 						break
 			else:
-				log(3, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
+				log(5, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
 				self.connection.send("-ERR invalid command\r\n")
 
 		if step == 1:
@@ -716,7 +716,7 @@ class Pop3ClientThread(threading.Thread):
 
 		while step == 1 and clientMsg != "":
 			clientMsg = sockReadLine(self.connection).lower()
-			log(3, clientMsg)
+			log(9, clientMsg)
 			if clientMsg == "":
 				break
 			elif clientMsg == "quit":
@@ -812,10 +812,10 @@ class Pop3ClientThread(threading.Thread):
 					mail[i][2] = 0
 				self.connection.send("+OK\r\n")
 			else:
-				log(3, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
+				log(5, "POP3 server: %s sent invalid command : %s" % (self.addr[0], clientMsg))
 				self.connection.send("-ERR invalid command\r\n")
 				
-		log(2, "POP3 server: end transaction with " + self.addr[0])
+		log(8, "POP3 server: end transaction with " + self.addr[0])
 		self.connection.close()
 		if step == 1:
 			for m in mail:
@@ -1120,7 +1120,7 @@ elif action == 'start':
 		except socket.error:
 			log(1, "Error while binding SMTP server socket on port %i." % (conf['smtpserverport']))
 			sys.exit()
-		log(2, "SMTP server: ready, listening on port %i." % (conf['smtpserverport']))
+		log(7, "SMTP server: ready, listening on port %i." % (conf['smtpserverport']))
 		smtpsock.listen(5)
 		smtpclients = {}
 		smtpserv = SmtpServerThread()
@@ -1133,7 +1133,7 @@ elif action == 'start':
 		except socket.error:
 			log(1, "Error while binding POP3 server socket on port %i." % (conf['pop3serverport']))
 			sys.exit()
-		log(2, "POP3 server: ready, listening on port %i." % (conf['pop3serverport']))
+		log(7, "POP3 server: ready, listening on port %i." % (conf['pop3serverport']))
 		pop3sock.listen(5)
 		pop3clients = {}
 		pop3serv = Pop3ServerThread()
