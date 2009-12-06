@@ -1112,7 +1112,7 @@ elif action == 'start':
 			print "Error while starting PyMaild. Check %s for more information." % (conf['logfile'])
 			sys.exit(1)
 	else:
-		log(0, " *********  PyMaild 0.3 starting... **********")
+		log(0, " *********  PyMaild 0.4 starting... **********")
 
 		smtpsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		try:
